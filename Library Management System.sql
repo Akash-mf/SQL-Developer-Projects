@@ -1,0 +1,120 @@
+CREATE DATABASE LibraryDB;
+USE LibraryDB;
+
+-- Creating Tables
+CREATE TABLE Authors (
+    AuthorID INT PRIMARY KEY AUTO_INCREMENT,
+    AuthorName VARCHAR(255) NOT NULL
+);
+
+CREATE TABLE Books (
+    BookID INT PRIMARY KEY AUTO_INCREMENT,
+    Title VARCHAR(255) NOT NULL,
+    AuthorID INT,
+    ISBN VARCHAR(20) UNIQUE NOT NULL,
+    CopiesAvailable INT DEFAULT 1,
+    FOREIGN KEY (AuthorID) REFERENCES Authors(AuthorID) ON DELETE CASCADE
+);
+
+CREATE TABLE Members (
+    MemberID INT PRIMARY KEY AUTO_INCREMENT,
+    Name VARCHAR(255) NOT NULL,
+    Email VARCHAR(255) UNIQUE NOT NULL,
+    Phone VARCHAR(15) NOT NULL
+);
+
+CREATE TABLE Borrowed_Books (
+    BorrowID INT PRIMARY KEY AUTO_INCREMENT,
+    MemberID INT,
+    BookID INT,
+    BorrowDate DATE NOT NULL,
+    DueDate DATE,
+    ReturnDate DATE DEFAULT NULL,
+    FOREIGN KEY (MemberID) REFERENCES Members(MemberID),
+    FOREIGN KEY (BookID) REFERENCES Books(BookID)
+);
+
+DELIMITER //
+CREATE TRIGGER set_borrow_date_before_insert
+BEFORE INSERT ON Borrowed_Books
+FOR EACH ROW
+BEGIN
+    IF NEW.BorrowDate IS NULL THEN
+        SET NEW.BorrowDate = CURDATE();
+    END IF;
+END;
+//
+DELIMITER ;
+
+
+CREATE TABLE Fines (
+    FineID INT PRIMARY KEY AUTO_INCREMENT,
+    BorrowID INT UNIQUE,
+    FineAmount DECIMAL(5,2) DEFAULT 0.00,
+    Paid BOOLEAN DEFAULT FALSE,
+    FOREIGN KEY (BorrowID) REFERENCES Borrowed_Books(BorrowID) ON DELETE CASCADE
+);
+
+-- Inserting Sample Data
+INSERT INTO Authors (AuthorName) VALUES ('J.K. Rowling'), ('George Orwell');
+INSERT INTO Books (Title, AuthorID, ISBN, CopiesAvailable) VALUES 
+('Harry Potter and the Sorcerer''s Stone', 1, '9780747532699', 5),
+('1984', 2, '9780451524935', 3);
+INSERT INTO Members (Name, Email, Phone) VALUES 
+('Alice Johnson', 'alice@example.com', '9876543210'),
+('Bob Smith', 'bob@example.com', '8765432109');
+
+DELIMITER $$
+CREATE PROCEDURE BorrowBook(IN p_MemberID INT, IN p_BookID INT)
+BEGIN
+    DECLARE available_copies INT;
+    SELECT CopiesAvailable INTO available_copies FROM Books WHERE BookID = p_BookID;
+    IF available_copies > 0 THEN
+        INSERT INTO Borrowed_Books (MemberID, BookID, BorrowDate) 
+        VALUES (p_MemberID, p_BookID, CURDATE());
+        UPDATE Books SET CopiesAvailable = CopiesAvailable - 1 WHERE BookID = p_BookID;
+        SELECT 'Book Borrowed Successfully' AS Message;
+    ELSE
+        SELECT 'Book Not Available' AS Message;
+    END IF;
+END $$
+DELIMITER ;
+
+CALL BorrowBook(1, 1);
+
+DELIMITER $$
+CREATE PROCEDURE ReturnBook(IN p_BorrowID INT)
+BEGIN
+    DECLARE due_date DATE;
+    DECLARE return_date DATE;
+    DECLARE fine_amount DECIMAL(5,2);
+    SELECT DueDate INTO due_date FROM Borrowed_Books WHERE BorrowID = p_BorrowID;
+    SET return_date = CURDATE();
+    UPDATE Borrowed_Books SET ReturnDate = return_date WHERE BorrowID = p_BorrowID;
+    IF return_date > due_date THEN
+        SET fine_amount = DATEDIFF(return_date, due_date) * 10;
+        INSERT INTO Fines (BorrowID, FineAmount) VALUES (p_BorrowID, fine_amount);
+    END IF;
+    UPDATE Books SET CopiesAvailable = CopiesAvailable + 1 WHERE BookID = (SELECT BookID FROM Borrowed_Books WHERE BorrowID = p_BorrowID);
+    SELECT 'Book Returned Successfully' AS Message;
+END $$
+DELIMITER ;
+
+CALL ReturnBook(1);
+
+-- Creating Views
+CREATE VIEW OverdueBooks AS
+SELECT BB.BorrowID, M.Name AS MemberName, B.Title AS BookTitle, BB.DueDate, BB.ReturnDate, F.FineAmount
+FROM Borrowed_Books BB
+JOIN Members M ON BB.MemberID = M.MemberID
+JOIN Books B ON BB.BookID = B.BookID
+LEFT JOIN Fines F ON BB.BorrowID = F.BorrowID
+WHERE BB.ReturnDate IS NULL AND BB.DueDate < CURDATE();
+
+SELECT * FROM OverdueBooks;
+
+-- Performance Optimization
+CREATE INDEX idx_books_title ON Books(Title);
+CREATE INDEX idx_members_email ON Members(Email);
+CREATE INDEX idx_borrowed_books_member ON Borrowed_Books(MemberID);
+
